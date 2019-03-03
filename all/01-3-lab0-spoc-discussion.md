@@ -95,12 +95,286 @@ SETGATE(intr, 1,2,3,0);
 #### 练习一
 
 1. 请在ucore中找一段你认为难度适当的AT&T格式X86汇编代码，尝试解释其含义。
+- 代码段： trap/trapentry.S
+- 解释：vector.S中对中断向量进行了设置，之后全部跳转到了_alltraps位置；其余关于代码的解释见注释
+```
+.text
+.globl __alltraps
+__alltraps:
+    # 先保存寄存器的值到栈中，其中%ds是data segment寄存器，%es,%fs,%gs三个附加段寄存器
+    pushl %ds
+    pushl %es
+    pushl %fs
+    pushl %gs
+    
+    # 保存了所有的通用寄存器的值，与后面的popal相对应
+    pushal
+    # load GD_KDATA into %ds and %es to set up data segments for kernel
+    movl $GD_KDATA, %eax
+    movw %ax, %ds
+    movw %ax, %es
+    # 将%esp中的值作为参数传递给了trap()
+    pushl %esp
+    # 调用trap()
+    call trap
+    # 恢复了%esp
+    popl %esp
+    # 继续执行下面的中断恢复部分.
 
+.globl __trapret
+__trapret:
+    # restore registers from stack
+
+    popal
+    # restore %ds, %es, %fs and %gs
+    popl %gs
+    popl %fs
+    popl %es
+    popl %ds
+    # get rid of the trap number and error code
+    addl $0x8, %esp
+    # 恢复
+    iret
+```
 2. (option)请在rcore中找一段你认为难度适当的RV汇编代码，尝试解释其含义。
+- 代码：arch/riscv32/boot/trap.asm
+- 解释：这段代码不长，主要是中断处理，首先通过SAVE_ALL保存现场，之后跳转到中断处理，最后再恢复。值得注意的是，这里的SAVE_ALL与RESTORE_ALL
+使用了宏来完成，在下一问中会进行一点分析。
+```
+.section .text
+    .globl __alltraps
+__alltraps:
+    SAVE_ALL
+    mv a0, sp
+    jal rust_trap
+    .globl __trapret
+__trapret:
+    RESTORE_ALL
+    # return from supervisor call
+    XRET
+```
+
 
 #### 练习二
 
 宏定义和引用在内核代码中很常用。请枚举ucore或rcore中宏定义的用途，并举例描述其含义。
+- 答：rcore/arch/riscv32/trap.asm中使用了宏，分别为SAVE_ALL与RESTORE_ALL，用来完成处理中断之前的保存与处理后的恢复操作。
+```
+.macro SAVE_ALL
+
+    # If coming from userspace, preserve the user stack pointer and load
+
+    # the kernel stack pointer. If we came from the kernel, sscratch
+
+    # will contain 0, and we should continue on the current stack.
+
+    csrrw sp, (xscratch), sp
+
+    bnez sp, _save_context
+
+_restore_kernel_sp:
+
+    csrr sp, (xscratch)
+
+    # sscratch = previous-sp, sp = kernel-sp
+
+_save_context:
+
+    # provide room for trap frame
+
+    addi sp, sp, -36 * XLENB
+
+    # save x registers except x2 (sp)
+
+    STORE x1, 1
+
+    STORE x3, 3
+
+    # tp(x4) = hartid. DON'T change.
+
+    # STORE x4, 4
+
+    STORE x5, 5
+
+    STORE x6, 6
+
+    STORE x7, 7
+
+    STORE x8, 8
+
+    STORE x9, 9
+
+    STORE x10, 10
+
+    STORE x11, 11
+
+    STORE x12, 12
+
+    STORE x13, 13
+
+    STORE x14, 14
+
+    STORE x15, 15
+
+    STORE x16, 16
+
+    STORE x17, 17
+
+    STORE x18, 18
+
+    STORE x19, 19
+
+    STORE x20, 20
+
+    STORE x21, 21
+
+    STORE x22, 22
+
+    STORE x23, 23
+
+    STORE x24, 24
+
+    STORE x25, 25
+
+    STORE x26, 26
+
+    STORE x27, 27
+
+    STORE x28, 28
+
+    STORE x29, 29
+
+    STORE x30, 30
+
+    STORE x31, 31
+
+
+
+    # get sp, sstatus, sepc, stval, scause
+
+    # set sscratch = 0
+
+    csrrw s0, (xscratch), x0
+
+    csrr s1, (xstatus)
+
+    csrr s2, (xepc)
+
+    csrr s3, (xtval)
+
+    csrr s4, (xcause)
+
+    # store sp, sstatus, sepc, sbadvaddr, scause
+
+    STORE s0, 2
+
+    STORE s1, 32
+
+    STORE s2, 33
+
+    STORE s3, 34
+
+    STORE s4, 35
+
+.endm
+
+
+
+.macro RESTORE_ALL
+
+    LOAD s1, 32             # s1 = sstatus
+
+    LOAD s2, 33             # s2 = sepc
+
+    TEST_BACK_TO_KERNEL
+
+    bnez s0, _restore_context   # s0 = back to kernel?
+
+_save_kernel_sp:
+
+    addi s0, sp, 36*XLENB
+
+    csrw (xscratch), s0         # sscratch = kernel-sp
+
+_restore_context:
+
+    # restore sstatus, sepc
+
+    csrw (xstatus), s1
+
+    csrw (xepc), s2
+
+
+
+    # restore x registers except x2 (sp)
+
+    LOAD x1, 1
+
+    LOAD x3, 3
+
+    # LOAD x4, 4
+
+    LOAD x5, 5
+
+    LOAD x6, 6
+
+    LOAD x7, 7
+
+    LOAD x8, 8
+
+    LOAD x9, 9
+
+    LOAD x10, 10
+
+    LOAD x11, 11
+
+    LOAD x12, 12
+
+    LOAD x13, 13
+
+    LOAD x14, 14
+
+    LOAD x15, 15
+
+    LOAD x16, 16
+
+    LOAD x17, 17
+
+    LOAD x18, 18
+
+    LOAD x19, 19
+
+    LOAD x20, 20
+
+    LOAD x21, 21
+
+    LOAD x22, 22
+
+    LOAD x23, 23
+
+    LOAD x24, 24
+
+    LOAD x25, 25
+
+    LOAD x26, 26
+
+    LOAD x27, 27
+
+    LOAD x28, 28
+
+    LOAD x29, 29
+
+    LOAD x30, 30
+
+    LOAD x31, 31
+
+    # restore sp last
+
+    LOAD x2, 2
+
+.endm
+```
+
 
 #### reference
  - [Intel格式和AT&T格式汇编区别](http://www.cnblogs.com/hdk1993/p/4820353.html)
